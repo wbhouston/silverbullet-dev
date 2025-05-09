@@ -26,6 +26,7 @@ class InlineContentWidget extends WidgetType {
     readonly url: string,
     readonly title: string,
     readonly dim: ContentDimensions | undefined,
+    readonly mimeType: string | undefined,
     readonly client: Client,
   ) {
     super();
@@ -46,15 +47,12 @@ class InlineContentWidget extends WidgetType {
   toDOM() {
     const div = document.createElement("div");
     div.className = "sb-inline-content";
-    div.style.display = "block";
-    const mimeType = mime.getType(
-      this.url.substring(this.url.lastIndexOf(".") + 1),
-    );
 
-    if (!mimeType) {
+    if (!this.mimeType) {
       return div;
     }
 
+    let mimeType = this!.mimeType;
     let url = this.url;
 
     // If the URL is a local path, encode the : so that it's not interpreted as a protocol
@@ -68,6 +66,7 @@ class InlineContentWidget extends WidgetType {
       img.alt = this.title;
       this.setDim(img, "load");
       div.appendChild(img);
+      div.style.display = "inline";
     } else if (mimeType.startsWith("video/")) {
       const video = document.createElement("video");
       video.src = url;
@@ -237,15 +236,20 @@ export function inlineContentPlugin(client: Client) {
           }
         }
 
+        const mimeType = mime.getType(
+          url.substring(url.lastIndexOf(".") + 1),
+        );
+
         widgets.push(
           Decoration.widget({
             widget: new InlineContentWidget(
               url,
               alias,
               dim,
+              mimeType,
               client,
             ),
-            block: true,
+            block: !mimeType?.startsWith("image/"),
           }).range(node.to),
         );
 
