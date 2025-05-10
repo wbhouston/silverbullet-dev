@@ -1,6 +1,7 @@
 import { parseExpressionString } from "$common/space_lua/parse.ts";
 import type { LuaExpression } from "$common/space_lua/ast.ts";
 import { evalExpression } from "$common/space_lua/eval.ts";
+import { parseMarkdown } from "$common/markdown_parser/parser.ts";
 import {
   LuaBuiltinFunction,
   LuaEnv,
@@ -11,6 +12,12 @@ import {
   luaValueToJS,
   singleResult,
 } from "$common/space_lua/runtime.ts";
+import {
+  findNodeOfType,
+  type ParseTree,
+  renderToText,
+  replaceNodesMatchingAsync,
+} from "@silverbulletmd/silverbullet/lib/tree";
 
 /**
  * These are Space Lua specific functions that are available to all scripts, but are not part of the standard Lua language.
@@ -38,6 +45,31 @@ function createAugmentedEnv(
 }
 
 /**
+ * Helper function to evaluate lua expressions
+ */
+async function evaluateExpression(
+  sf: LuaStackFrame,
+  expr: string,
+  envAugmentation?: LuaTable,
+): Promise<ParseTree> {
+  try {
+    const parsedExpr = parseExpressionString(expr);
+    const env = createAugmentedEnv(sf, envAugmentation);
+    const luaResult = await luaValueToJS(
+      singleResult(await evalExpression(parsedExpr, env, sf)),
+      sf,
+    );
+    const result = await luaToString(luaResult);
+    return parseMarkdown(result);
+  } catch (e: any) {
+    throw new LuaRuntimeError(
+      `Error evaluating "${expr}": ${e.message}`,
+      sf,
+    );
+  }
+}
+
+/**
  * Interpolates a string with lua expressions and returns the result.
  *
  * @param sf - The current space_lua state.
@@ -50,56 +82,42 @@ export async function interpolateLuaString(
   template: string,
   envAugmentation?: LuaTable,
 ): Promise<string> {
-  let result = "";
-  let currentIndex = 0;
+  let parsed = parseMarkdown(template);
 
-  while (true) {
-    const startIndex = template.indexOf("${", currentIndex);
-    if (startIndex === -1) {
-      result += template.slice(currentIndex);
-      break;
-    }
+  await replaceNodesMatchingAsync(parsed, async (n) => {
+    if (n.type === "LuaDirective") {
+      const expressionNode = findNodeOfType(n, "LuaExpressionDirective");
 
-    result += template.slice(currentIndex, startIndex);
-
-    // Find matching closing brace by counting nesting
-    let nestLevel = 1;
-    let endIndex = startIndex + 2;
-    while (nestLevel > 0 && endIndex < template.length) {
-      if (template[endIndex] === "{") {
-        nestLevel++;
-      } else if (template[endIndex] === "}") {
-        nestLevel--;
+      if (expressionNode) {
+        return evaluateExpression(
+          sf,
+          renderToText(expressionNode),
+          envAugmentation,
+        );
       }
-      if (nestLevel > 0) {
-        endIndex++;
+    } else if (n.type === "Escape" && renderToText(n) === "\\$") {
+      return parseMarkdown("$");
+    } else if (n.type === "WikiLinkPage") {
+      const wikiLink = renderToText(n);
+      const parsedWikiLink = parseMarkdown(wikiLink);
+      const expressionNode = findNodeOfType(
+        parsedWikiLink,
+        "LuaExpressionDirective",
+      );
+
+      if (expressionNode) {
+        return evaluateExpression(
+          sf,
+          renderToText(expressionNode),
+          envAugmentation,
+        );
       }
     }
 
-    if (nestLevel > 0) {
-      throw new LuaRuntimeError("Unclosed interpolation expression", sf);
-    }
+    return undefined;
+  });
 
-    const expr = template.slice(startIndex + 2, endIndex);
-    try {
-      const parsedExpr = parseExpressionString(expr);
-      const env = createAugmentedEnv(sf, envAugmentation);
-      const luaResult = await luaValueToJS(
-        singleResult(await evalExpression(parsedExpr, env, sf)),
-        sf,
-      );
-      result += await luaToString(luaResult);
-    } catch (e: any) {
-      throw new LuaRuntimeError(
-        `Error evaluating "${expr}": ${e.message}`,
-        sf,
-      );
-    }
-
-    currentIndex = endIndex + 1;
-  }
-
-  return result;
+  return renderToText(parsed);
 }
 
 export const spaceluaApi = new LuaTable({

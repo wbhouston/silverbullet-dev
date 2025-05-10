@@ -481,4 +481,25 @@ Deno.test("Thread local _CTX - advanced cases", async () => {
     ),
     `Some JSON {"name":"Pete"}!`,
   );
+
+  // Lua expressions in WikiLinks are interpolated
+  assertEquals(
+    await evalExpr(
+      `spacelua.interpolate('Hello [[\${name}]]!', { name = 'world' })`,
+      env,
+      sf,
+    ),
+    `Hello [[world]]!`,
+  );
+
+  // Removes backslash from escaped $
+  // Use four backslashes here to double-escape the needed \ and one for the $
+  assertEquals(
+    await evalExpr(
+      `spacelua.interpolate('Hello \\\\\${name}!', { name = 'world' })`,
+      env,
+      sf,
+    ),
+    `Hello \${name}!`,
+  );
 });
